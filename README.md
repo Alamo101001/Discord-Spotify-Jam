@@ -1,7 +1,5 @@
 # Discord-Spotify-Jam
 
-Small script to default Spotify links in Discord to open in the Spotify App and not a browser.
-
 Click a Spotify link or a Jam invite in Discord (or any app) and it opens in the **Spotify app**, not your browser. Every other link still opens in your normal browser.
 
 ## Download
