@@ -1,0 +1,80 @@
+#!/bin/bash
+# link-router: default handler for web links.
+#   Spotify links (open.spotify.com, spotify.link, spotify.app.link) -> Spotify app
+#   everything else                                                  -> your normal browser
+# Anything that can't be converted falls back to the browser, so no link is ever lost.
+#
+#   link-router URL              open the link
+#   link-router --dry-run URL    print what would happen, open nothing
+
+CONF=${XDG_CONFIG_HOME:-$HOME/.config}/link-router/browser   # .desktop file of your normal browser
+LOG=${XDG_CACHE_HOME:-$HOME/.cache}/link-router.log
+
+dry=0
+[ "${1:-}" = "--dry-run" ] && { dry=1; shift; }
+
+log() { mkdir -p "${LOG%/*}" && echo "$(date '+%F %T') $*" >> "$LOG"; }
+
+browser() {
+    if [ $dry -eq 1 ]; then echo "BROWSER $*"; exit 0; fi
+    log "browser: $*"
+    local desktop
+    desktop=$(cat "$CONF" 2>/dev/null)
+    [ -f "$desktop" ] && exec gio launch "$desktop" "$@"
+    # No saved browser: try Firefox (never xdg-open, which would loop back here)
+    for b in /snap/bin/firefox firefox; do command -v "$b" >/dev/null && exec "$b" "$@"; done
+    log "no browser found for: $*"
+    exit 1
+}
+
+# open.spotify.com URL -> spotify:type:id (drops query strings and intl-xx prefixes)
+to_uri() {
+    python3 -I - "$1" <<'EOF'
+import sys, urllib.parse
+u = urllib.parse.urlsplit(sys.argv[1])
+if u.hostname != "open.spotify.com":
+    sys.exit(1)
+parts = [p for p in u.path.split("/") if p]
+if parts and parts[0].startswith("intl-"):
+    parts = parts[1:]
+if parts and parts[0] == "embed":
+    parts = parts[1:]
+if len(parts) < 2:
+    sys.exit(1)
+print("spotify:" + ":".join(parts))
+EOF
+}
+
+# Short links redirect (sometimes through an HTML page) to open.spotify.com
+resolve_short() {
+    local final
+    final=$(curl -sL --max-time 6 -o /dev/null -w '%{url_effective}' "$1") || return 1
+    case "$final" in
+        https://open.spotify.com/*) echo "$final"; return 0 ;;
+    esac
+    curl -sL --max-time 6 "$1" | grep -oE 'https://open\.spotify\.com/[A-Za-z0-9_/?=&.-]+' | head -1
+}
+
+[ $# -eq 0 ] && browser
+
+url=$1
+if [ $# -gt 1 ]; then browser "$@"; fi
+
+case "$url" in
+    http://spotify.link/*|https://spotify.link/*|https://spotify.app.link/*)
+        long=$(resolve_short "$url")
+        [ -n "$long" ] || { log "could not resolve $url"; browser "$url"; }
+        [ $dry -eq 1 ] && echo "RESOLVED $long"
+        url=$long ;;
+esac
+
+case "$url" in
+    http://open.spotify.com/*|https://open.spotify.com/*)
+        uri=$(to_uri "${url/http:/https:}") || browser "$url"
+        if [ $dry -eq 1 ]; then echo "SPOTIFY $uri"; exit 0; fi
+        log "spotify: $url -> $uri"
+        xdg-open "$uri" || browser "$url"
+        exit 0 ;;
+esac
+
+browser "$url"
